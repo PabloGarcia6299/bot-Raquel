@@ -4,7 +4,7 @@ const http = require('http');
 const pino = require('pino');
 const fs = require('fs');
 
-// Servidor HTTP para mantener activo Render
+// Servidor HTTP para Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => res.end('Raquel Bot está activo')).listen(PORT, () => {
     console.log(`Servidor HTTP escuchando en el puerto ${PORT}`);
@@ -19,12 +19,11 @@ const mapaGrupos = new Map();
 async function iniciarRaquel() {
     console.log('Iniciando proceso de conexión con WhatsApp...');
 
-    // Limpieza de sesión incompleta previa si existiera
+    // Limpieza de credenciales incompletas
     if (fs.existsSync('auth_info_baileys/creds.json')) {
         try {
             const credsData = JSON.parse(fs.readFileSync('auth_info_baileys/creds.json', 'utf-8'));
             if (!credsData.registered) {
-                console.log('Limpiando datos de sesión incompletos...');
                 fs.rmSync('auth_info_baileys', { recursive: true, force: true });
             }
         } catch (e) {
@@ -37,42 +36,44 @@ async function iniciarRaquel() {
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        logger: pino({ level: 'error' }),
-        browser: Browsers.ubuntu('Chrome'),
+        logger: pino({ level: 'silent' }),
+        browser: Browsers.macOS('Desktop'),
         markOnlineOnConnect: false
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Si el número no está registrado, pide el código directamente tras dar tiempo a abrir la conexión
-    if (!sock.authState.creds.registered) {
-        setTimeout(async () => {
+    let solicitoCodigo = false;
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        // Solicita el código ÚNICAMENTE cuando WhatsApp emite la señal de espera (qr)
+        if (qr && !sock.authState.creds.registered && !solicitoCodigo) {
+            solicitoCodigo = true;
+            console.log('Canal abierto. Generando código de vinculación...');
+            
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            
             try {
-                console.log('Solicitando código de vinculación a WhatsApp...');
                 const code = await sock.requestPairingCode(NUMERO_TELEFONO_BOT);
                 console.log('\n====================================');
                 console.log('🔑 CÓDIGO DE VINCULACIÓN DE RAQUEL:', code);
                 console.log('====================================\n');
             } catch (err) {
-                console.error('Error al generar el código:', err.message);
+                console.error('Error al pedir el código:', err.message);
+                solicitoCodigo = false;
             }
-        }, 4000);
-    }
-
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
-
-        if (connection) {
-            console.log(`Estado de conexión: ${connection}`);
         }
 
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log(`Conexión cerrada (código ${statusCode}). Reintentando en 5s...`);
+            solicitoCodigo = false;
             
+            console.log(`Conexión cerrada (código ${statusCode}). Reintentando en 10s...`);
             if (shouldReconnect) {
-                setTimeout(iniciarRaquel, 5000);
+                setTimeout(iniciarRaquel, 10000);
             }
         } else if (connection === 'open') {
             console.log('¡Raquel está conectada y lista en WhatsApp!');
