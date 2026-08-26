@@ -5,7 +5,7 @@ const fetch = require('node-fetch');
 const APPS_SCRIPT_URL = "https://script.google.com/macros/library/d/1nWxSVx3dT1Uuc-1b6sBR7OD0jDILdH38Tvz8gvMTE1E-R8CzdgtwUAwy/2";
 
 // 2. Número de teléfono de Raquel (Código país + código área + número, sin el + ni espacios)
-const NUMERO_TELEFONO_BOT = "54911XXXXXXXX"; 
+const NUMERO_TELEFONO_BOT = "15556742106"; 
 
 let codigoSolicitado = false;
 
