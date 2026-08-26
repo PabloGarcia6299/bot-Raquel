@@ -1,12 +1,20 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const fetch = require('node-fetch');
+const http = require('http');
+const pino = require('pino');
 
-// Configuración con tus datos
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaRMvrEC_NQjxJjwmEgv8rVGymcYSZN2oFzopoG-8E_nKT2QS16FN4tJ2A6tZeCFM5/exec";
+// Servidor HTTP integrado para que Render no reinicie el servicio por falta de puerto
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => res.end('Raquel Bot está activo')).listen(PORT, () => {
+    console.log(`Servidor HTTP escuchando en el puerto ${PORT}`);
+});
+
+// Reemplazar con tu URL desplegada que termina en /exec
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaRMvrEC_NQjxJjwmEgv8rVGymcYSZN2oFzopoG-8E_nKT2QS16FN4tJ2A6tZeCFM5/exec"; 
 const NUMERO_TELEFONO_BOT = "541167613040";
 
 let codigoSolicitado = false;
-const mapaGrupos = new Map(); // Caché para evitar consultas repetidas de metadata
+const mapaGrupos = new Map();
 
 async function iniciarRaquel() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -14,16 +22,17 @@ async function iniciarRaquel() {
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        browser: Browsers.ubuntu('Chrome')
+        logger: pino({ level: 'silent' }), // Oculta los logs técnicos masivos de Baileys
+        browser: Browsers.ubuntu('Chrome'),
+        markOnlineOnConnect: false
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr && !sock.authState.creds.registered && !codigoSolicitado) {
-            codigoSolicitado = true;
+    // Esperar a que la conexión se estabilice antes de pedir el código
+    if (!sock.authState.creds.registered && !codigoSolicitado) {
+        codigoSolicitado = true;
+        setTimeout(async () => {
             try {
                 const code = await sock.requestPairingCode(NUMERO_TELEFONO_BOT);
                 console.log('\n====================================');
@@ -33,15 +42,18 @@ async function iniciarRaquel() {
                 console.error('Error al generar código de vinculación:', err.message);
                 codigoSolicitado = false;
             }
-        }
+        }, 6000);
+    }
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            codigoSolicitado = false;
             
             if (shouldReconnect) {
-                iniciarRaquel();
+                setTimeout(iniciarRaquel, 3000);
             }
         } else if (connection === 'open') {
             console.log('¡Raquel está conectada y lista en WhatsApp!');
@@ -56,10 +68,8 @@ async function iniciarRaquel() {
         const remoteJid = msg.key.remoteJid;
         const esGrupo = remoteJid.endsWith('@g.us');
 
-        // Ignorar chats privados
         if (!esGrupo) return;
 
-        // Identificar el nombre del grupo
         let nombreGrupo = mapaGrupos.get(remoteJid);
         if (!nombreGrupo) {
             try {
@@ -71,11 +81,9 @@ async function iniciarRaquel() {
             }
         }
 
-        // Evaluar si es el grupo objetivo "Gasto Familiares" o "Gastos Familiares"
         const esGrupoObjetivo = nombreGrupo.toLowerCase().includes("gasto");
         if (!esGrupoObjetivo) return;
 
-        // Extraer el número real de quien envió el mensaje en el grupo
         const sender = msg.key.participant ? msg.key.participant.replace('@s.whatsapp.net', '') : remoteJid.replace('@s.whatsapp.net', '');
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
 
