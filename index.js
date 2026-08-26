@@ -1,38 +1,50 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const fetch = require('node-fetch');
 
-// 1. Reemplazá con tu URL de Google Apps Script
+// 1. URL de Google Apps Script
 const APPS_SCRIPT_URL = "https://script.google.com/macros/library/d/1nWxSVx3dT1Uuc-1b6sBR7OD0jDILdH38Tvz8gvMTE1E-R8CzdgtwUAwy/2";
 
-// 2. Reemplazá con el número de teléfono que será Raquel (Código país + código área + número, SIN el signo + ni espacios)
-// Ejemplo Argentina: "5491122334455"
-const NUMERO_TELEFONO_BOT = "54911XXXXXXXX";
+// 2. Número de teléfono de Raquel (Código país + código área + número, sin el + ni espacios)
+const NUMERO_TELEFONO_BOT = "54911XXXXXXXX"; 
+
+let codigoSolicitado = false;
 
 async function iniciarRaquel() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false
+        printQRInTerminal: false,
+        browser: Browsers.ubuntu('Chrome') // Evita que WhatsApp cierre el socket por seguridad
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Solicitar código de vinculación de 8 dígitos
-    if (!sock.authState.creds.registered) {
-        setTimeout(async () => {
-            const code = await sock.requestPairingCode(NUMERO_TELEFONO_BOT);
-            console.log('\n====================================');
-            console.log('CÓDIGO DE VINCULACIÓN DE RAQUEL:', code);
-            console.log('====================================\n');
-        }, 3000);
-    }
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
 
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
+        // Solicitar el código SOLO cuando WhatsApp emita que la conexión está lista
+        if (qr && !sock.authState.creds.registered && !codigoSolicitado) {
+            codigoSolicitado = true;
+            try {
+                const code = await sock.requestPairingCode(NUMERO_TELEFONO_BOT);
+                console.log('\n====================================');
+                console.log('🔑 CÓDIGO DE VINCULACIÓN DE RAQUEL:', code);
+                console.log('====================================\n');
+            } catch (err) {
+                console.error('Error al generar código de vinculación:', err.message);
+                codigoSolicitado = false;
+            }
+        }
+
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) iniciarRaquel();
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            codigoSolicitado = false;
+            
+            if (shouldReconnect) {
+                iniciarRaquel();
+            }
         } else if (connection === 'open') {
             console.log('¡Raquel está conectada y lista en WhatsApp!');
         }
