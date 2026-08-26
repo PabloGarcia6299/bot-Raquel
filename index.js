@@ -1,13 +1,12 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const fetch = require('node-fetch');
 
-// 1. URL de Google Apps Script
+// Configuración con tus datos
 const APPS_SCRIPT_URL = "https://script.google.com/macros/library/d/1nWxSVx3dT1Uuc-1b6sBR7OD0jDILdH38Tvz8gvMTE1E-R8CzdgtwUAwy/2";
-
-// 2. Número de teléfono de Raquel (Código país + código área + número, sin el + ni espacios)
-const NUMERO_TELEFONO_BOT = "15556742106"; 
+const NUMERO_TELEFONO_BOT = "541167613040";
 
 let codigoSolicitado = false;
+const mapaGrupos = new Map(); // Caché para evitar consultas repetidas de metadata
 
 async function iniciarRaquel() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -15,7 +14,7 @@ async function iniciarRaquel() {
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        browser: Browsers.ubuntu('Chrome') // Evita que WhatsApp cierre el socket por seguridad
+        browser: Browsers.ubuntu('Chrome')
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -23,7 +22,6 @@ async function iniciarRaquel() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // Solicitar el código SOLO cuando WhatsApp emita que la conexión está lista
         if (qr && !sock.authState.creds.registered && !codigoSolicitado) {
             codigoSolicitado = true;
             try {
@@ -55,7 +53,30 @@ async function iniciarRaquel() {
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe) return;
 
-        const sender = msg.key.remoteJid.replace('@s.whatsapp.net', '');
+        const remoteJid = msg.key.remoteJid;
+        const esGrupo = remoteJid.endsWith('@g.us');
+
+        // Ignorar chats privados
+        if (!esGrupo) return;
+
+        // Identificar el nombre del grupo
+        let nombreGrupo = mapaGrupos.get(remoteJid);
+        if (!nombreGrupo) {
+            try {
+                const groupMetadata = await sock.groupMetadata(remoteJid);
+                nombreGrupo = groupMetadata.subject;
+                mapaGrupos.set(remoteJid, nombreGrupo);
+            } catch (e) {
+                return;
+            }
+        }
+
+        // Evaluar si es el grupo objetivo "Gasto Familiares" o "Gastos Familiares"
+        const esGrupoObjetivo = nombreGrupo.toLowerCase().includes("gasto");
+        if (!esGrupoObjetivo) return;
+
+        // Extraer el número real de quien envió el mensaje en el grupo
+        const sender = msg.key.participant ? msg.key.participant.replace('@s.whatsapp.net', '') : remoteJid.replace('@s.whatsapp.net', '');
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
 
         if (text) {
@@ -67,7 +88,9 @@ async function iniciarRaquel() {
                 });
                 const resJson = await response.json();
 
-                await sock.sendMessage(msg.key.remoteJid, { text: resJson.text });
+                if (resJson && resJson.text) {
+                    await sock.sendMessage(remoteJid, { text: resJson.text });
+                }
             } catch (err) {
                 console.error("Error contactando Apps Script:", err);
             }
