@@ -3,13 +3,13 @@ const fetch = require('node-fetch');
 const http = require('http');
 const pino = require('pino');
 
-// Servidor HTTP integrado para que Render no reinicie el servicio por falta de puerto
+// Servidor HTTP para mantener activo el puerto en Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => res.end('Raquel Bot está activo')).listen(PORT, () => {
     console.log(`Servidor HTTP escuchando en el puerto ${PORT}`);
 });
 
-// Reemplazar con tu URL desplegada que termina en /exec
+// ⚠️ Recordá colocar tu URL de Apps Script terminada en /exec
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaRMvrEC_NQjxJjwmEgv8rVGymcYSZN2oFzopoG-8E_nKT2QS16FN4tJ2A6tZeCFM5/exec"; 
 const NUMERO_TELEFONO_BOT = "541167613040";
 
@@ -22,17 +22,21 @@ async function iniciarRaquel() {
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        logger: pino({ level: 'silent' }), // Oculta los logs técnicos masivos de Baileys
+        logger: pino({ level: 'silent' }),
         browser: Browsers.ubuntu('Chrome'),
         markOnlineOnConnect: false
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Esperar a que la conexión se estabilice antes de pedir el código
-    if (!sock.authState.creds.registered && !codigoSolicitado) {
-        codigoSolicitado = true;
-        setTimeout(async () => {
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        // Se solicita el código SOLO cuando WhatsApp notifique que el socket está listo (evento qr)
+        if (qr && !sock.authState.creds.registered && !codigoSolicitado) {
+            codigoSolicitado = true;
+            // Pausa de 2 segundos para asegurar estabilidad tras la señal inicial
+            await new Promise(resolve => setTimeout(resolve, 2000));
             try {
                 const code = await sock.requestPairingCode(NUMERO_TELEFONO_BOT);
                 console.log('\n====================================');
@@ -42,15 +46,12 @@ async function iniciarRaquel() {
                 console.error('Error al generar código de vinculación:', err.message);
                 codigoSolicitado = false;
             }
-        }, 6000);
-    }
-
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
+        }
 
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            codigoSolicitado = false;
             
             if (shouldReconnect) {
                 setTimeout(iniciarRaquel, 3000);
