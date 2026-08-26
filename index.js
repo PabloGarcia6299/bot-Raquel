@@ -4,22 +4,18 @@ const http = require('http');
 const pino = require('pino');
 const fs = require('fs');
 
-// Servidor HTTP para Render
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => res.end('Raquel Bot está activo')).listen(PORT, () => {
-    console.log(`Servidor HTTP escuchando en el puerto ${PORT}`);
+http.createServer((req, res) => res.end('Raquel Bot activo')).listen(PORT, () => {
+    console.log(`Servidor HTTP escuchando en puerto ${PORT}`);
 });
 
-// ⚠️ Reemplazá con tu URL desplegada de Apps Script (terminada en /exec)
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaRMvrEC_NQjxJjwmEgv8rVGymcYSZN2oFzopoG-8E_nKT2QS16FN4tJ2A6tZeCFM5/exec"; 
+// ⚠️ Recordá reemplazar con tu URL de Apps Script terminada en /exec
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/TU_SCRIPT_ID/exec"; 
 const NUMERO_TELEFONO_BOT = "541167613040";
 
 const mapaGrupos = new Map();
 
 async function iniciarRaquel() {
-    console.log('Iniciando proceso de conexión con WhatsApp...');
-
-    // Limpieza de credenciales incompletas
     if (fs.existsSync('auth_info_baileys/creds.json')) {
         try {
             const credsData = JSON.parse(fs.readFileSync('auth_info_baileys/creds.json', 'utf-8'));
@@ -37,8 +33,8 @@ async function iniciarRaquel() {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: Browsers.macOS('Desktop'),
-        markOnlineOnConnect: false
+        browser: Browsers.ubuntu('Chrome'),
+        syncFullHistory: false
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -48,12 +44,10 @@ async function iniciarRaquel() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // Solicita el código ÚNICAMENTE cuando WhatsApp emite la señal de espera (qr)
         if (qr && !sock.authState.creds.registered && !solicitoCodigo) {
             solicitoCodigo = true;
-            console.log('Canal abierto. Generando código de vinculación...');
-            
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            console.log('Socket estable. Aguardando 4 segundos para pedir código...');
+            await new Promise(r => setTimeout(r, 4000));
             
             try {
                 const code = await sock.requestPairingCode(NUMERO_TELEFONO_BOT);
@@ -61,18 +55,19 @@ async function iniciarRaquel() {
                 console.log('🔑 CÓDIGO DE VINCULACIÓN DE RAQUEL:', code);
                 console.log('====================================\n');
             } catch (err) {
-                console.error('Error al pedir el código:', err.message);
+                console.error('Error al generar código:', err.message);
                 solicitoCodigo = false;
             }
         }
 
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             solicitoCodigo = false;
             
-            console.log(`Conexión cerrada (código ${statusCode}). Reintentando en 10s...`);
-            if (shouldReconnect) {
+            if (statusCode === 405 || statusCode === 401) {
+                console.log('⚠️ WhatsApp aplicó restricción temporal (405). Pausando reintento 2 minutos...');
+                setTimeout(iniciarRaquel, 120000);
+            } else if (statusCode !== DisconnectReason.loggedOut) {
                 setTimeout(iniciarRaquel, 10000);
             }
         } else if (connection === 'open') {
@@ -86,9 +81,7 @@ async function iniciarRaquel() {
         if (!msg.message || msg.key.fromMe) return;
 
         const remoteJid = msg.key.remoteJid;
-        const esGrupo = remoteJid.endsWith('@g.us');
-
-        if (!esGrupo) return;
+        if (!remoteJid.endsWith('@g.us')) return;
 
         let nombreGrupo = mapaGrupos.get(remoteJid);
         if (!nombreGrupo) {
@@ -101,8 +94,7 @@ async function iniciarRaquel() {
             }
         }
 
-        const esGrupoObjetivo = nombreGrupo.toLowerCase().includes("gasto");
-        if (!esGrupoObjetivo) return;
+        if (!nombreGrupo.toLowerCase().includes("gasto")) return;
 
         const sender = msg.key.participant ? msg.key.participant.replace('@s.whatsapp.net', '') : remoteJid.replace('@s.whatsapp.net', '');
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
@@ -111,12 +103,11 @@ async function iniciarRaquel() {
             try {
                 const response = await fetch(APPS_SCRIPT_URL, {
                     method: 'POST',
-                    body: JSON.stringify({ sender: sender, message: text }),
+                    body: JSON.stringify({ sender, message: text }),
                     headers: { 'Content-Type': 'application/json' }
                 });
                 const resJson = await response.json();
-
-                if (resJson && resJson.text) {
+                if (resJson?.text) {
                     await sock.sendMessage(remoteJid, { text: resJson.text });
                 }
             } catch (err) {
