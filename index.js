@@ -3,7 +3,7 @@ const fetch = require('node-fetch');
 const qrcode = require('qrcode-terminal');
 
 // REEMPLAZÁ ESTA URL POR TU URL DE APPS SCRIPT (DEL PASO 1)
-const APPS_SCRIPT_URL = "TU_URL_DE_GOOGLE_APPS_SCRIPT_AQUI";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/library/d/1nWxSVx3dT1Uuc-1b6sBR7OD0jDILdH38Tvz8gvMTE1E-R8CzdgtwUAwy/2";
 
 async function iniciarRaquel() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
