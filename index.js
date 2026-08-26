@@ -2,14 +2,15 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers
 const fetch = require('node-fetch');
 const http = require('http');
 const pino = require('pino');
+const fs = require('fs');
 
-// Servidor HTTP para mantener activo el puerto en Render
+// Servidor HTTP para Render
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => res.end('Raquel Bot está activo')).listen(PORT, () => {
     console.log(`Servidor HTTP escuchando en el puerto ${PORT}`);
 });
 
-// ⚠️ Recordá colocar tu URL de Apps Script terminada en /exec
+// ⚠️ Reemplazá con tu URL desplegada de Apps Script (que termina en /exec)
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaRMvrEC_NQjxJjwmEgv8rVGymcYSZN2oFzopoG-8E_nKT2QS16FN4tJ2A6tZeCFM5/exec"; 
 const NUMERO_TELEFONO_BOT = "541167613040";
 
@@ -17,6 +18,19 @@ let codigoSolicitado = false;
 const mapaGrupos = new Map();
 
 async function iniciarRaquel() {
+    // Limpieza de datos residuales si la sesión anterior no se completó
+    if (fs.existsSync('auth_info_baileys/creds.json')) {
+        try {
+            const credsData = JSON.parse(fs.readFileSync('auth_info_baileys/creds.json', 'utf-8'));
+            if (!credsData.registered) {
+                console.log('Limpiando datos de sesión incompletos...');
+                fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+            }
+        } catch (e) {
+            fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+        }
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
     const sock = makeWASocket({
@@ -32,11 +46,9 @@ async function iniciarRaquel() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // Se solicita el código SOLO cuando WhatsApp notifique que el socket está listo (evento qr)
         if (qr && !sock.authState.creds.registered && !codigoSolicitado) {
             codigoSolicitado = true;
-            // Pausa de 2 segundos para asegurar estabilidad tras la señal inicial
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log('Generando código de vinculación...');
             try {
                 const code = await sock.requestPairingCode(NUMERO_TELEFONO_BOT);
                 console.log('\n====================================');
