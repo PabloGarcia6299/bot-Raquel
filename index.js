@@ -1,26 +1,35 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const fetch = require('node-fetch');
-const qrcode = require('qrcode-terminal');
 
-// REEMPLAZÁ ESTA URL POR TU URL DE APPS SCRIPT (DEL PASO 1)
+// 1. Reemplazá con tu URL de Google Apps Script
 const APPS_SCRIPT_URL = "https://script.google.com/macros/library/d/1nWxSVx3dT1Uuc-1b6sBR7OD0jDILdH38Tvz8gvMTE1E-R8CzdgtwUAwy/2";
+
+// 2. Reemplazá con el número de teléfono que será Raquel (Código país + código área + número, SIN el signo + ni espacios)
+// Ejemplo Argentina: "5491122334455"
+const NUMERO_TELEFONO_BOT = "54911XXXXXXXX";
 
 async function iniciarRaquel() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true
+        printQRInTerminal: false
     });
 
     sock.ev.on('creds.update', saveCreds);
 
+    // Solicitar código de vinculación de 8 dígitos
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            const code = await sock.requestPairingCode(NUMERO_TELEFONO_BOT);
+            console.log('\n====================================');
+            console.log('CÓDIGO DE VINCULACIÓN DE RAQUEL:', code);
+            console.log('====================================\n');
+        }, 3000);
+    }
+
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) {
-            console.log('ESCANEA ESTE CODIGO QR CON EL WHATSAPP DE RAQUEL:');
-            qrcode.generate(qr, { small: true });
-        }
+        const { connection, lastDisconnect } = update;
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
             if (shouldReconnect) iniciarRaquel();
