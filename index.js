@@ -132,7 +132,10 @@ async function iniciarRaquel() {
             }
         }
 
-        if (!nombreGrupo.toLowerCase().includes("gasto")) return;
+        // Lista de grupos donde Raquel tiene permiso para responder
+const GRUPOS_AUTORIZADOS = ["gastos familiares"];
+
+if (!GRUPOS_AUTORIZADOS.includes(nombreGrupo.toLowerCase().trim())) return;
 
         const sender = msg.key.participant ? msg.key.participant.replace('@s.whatsapp.net', '') : remoteJid.replace('@s.whatsapp.net', '');
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
