@@ -15,10 +15,7 @@ http.createServer((req, res) => res.end('Raquel Bot Activo')).listen(PORT, () =>
     console.log(`[HTTP] Servidor escuchando en el puerto ${PORT}`);
 });
 
-// URL confirmada de Google Apps Script
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaRMvrEC_NQjxJjwmEgv8rVGymcYSZN2oFzopoG-8E_nKT2QS16FN4tJ2A6tZeCFM5/exec"; 
-
-// Número formateado (Argentina con prefijo 9)
 const NUMERO_TELEFONO_BOT = "5491167613040";
 
 const mapaGrupos = new Map();
@@ -27,6 +24,22 @@ let solicitoCodigo = false;
 async function iniciarRaquel() {
     console.log('\n--------------------------------------------------');
     console.log('[INIT] Iniciando proceso de conexión...');
+
+    // Limpieza estricta de credenciales si no está vinculada la sesión
+    if (fs.existsSync('auth_info_baileys')) {
+        try {
+            const credsFile = 'auth_info_baileys/creds.json';
+            if (fs.existsSync(credsFile)) {
+                const credsData = JSON.parse(fs.readFileSync(credsFile, 'utf-8'));
+                if (!credsData.registered) {
+                    console.log('[AUTH] Eliminando sesión no registrada para evitar conflictos...');
+                    fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                }
+            }
+        } catch (e) {
+            fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+        }
+    }
 
     let version = [2, 3000, 1015901307];
     try {
@@ -61,9 +74,8 @@ async function iniciarRaquel() {
 
         if (qr && !sock.authState.creds.registered && !solicitoCodigo) {
             solicitoCodigo = true;
-            console.log('[PAIRING] Generando código de vinculación...');
+            console.log('[PAIRING] Esperando 5 segundos para estabilizar el socket...');
             
-            // Pausa estratégica para sincronizar llaves con WhatsApp
             await new Promise(r => setTimeout(r, 5000));
             
             try {
