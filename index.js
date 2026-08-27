@@ -116,7 +116,7 @@ async function iniciarRaquel() {
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        if (!msg.message) return; // Permite procesar tus propios mensajes
 
         const remoteJid = msg.key.remoteJid;
         if (!remoteJid.endsWith('@g.us')) return;
@@ -131,6 +131,37 @@ async function iniciarRaquel() {
                 return;
             }
         }
+
+        // Filtro por nombre de grupo
+        const GRUPOS_AUTORIZADOS = ["gastos familiares"];
+        if (!GRUPOS_AUTORIZADOS.includes(nombreGrupo.toLowerCase().trim())) return;
+
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+        if (!text) return;
+
+        // PROTECCIÓN ANTI-BUCLE: Ignora las respuestas automáticas enviadas por Raquel
+        if (msg.key.fromMe && (text.startsWith("✅") || text.startsWith("🤖") || text.toLowerCase().includes("registrado"))) {
+            return;
+        }
+
+        // Detecta el número del remitente (incluso si sos vos mismo)
+        const rawSender = msg.key.participant || msg.key.remoteJid;
+        const sender = rawSender.replace('@s.whatsapp.net', '').replace('@g.us', '').split(':')[0];
+
+        try {
+            const response = await fetch(APPS_SCRIPT_URL, {
+                method: 'POST',
+                body: JSON.stringify({ sender, message: text }),
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const resJson = await response.json();
+            if (resJson?.text) {
+                await sock.sendMessage(remoteJid, { text: resJson.text });
+            }
+        } catch (err) {
+            console.error("[APPS SCRIPT ERROR]", err);
+        }
+    });
 
         // Lista de grupos donde Raquel tiene permiso para responder
 const GRUPOS_AUTORIZADOS = ["Gastos Familiares"];
