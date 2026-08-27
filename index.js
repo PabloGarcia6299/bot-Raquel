@@ -133,7 +133,7 @@ async function iniciarRaquel() {
         }
 
         // Lista de grupos donde Raquel tiene permiso para responder
-const GRUPOS_AUTORIZADOS = ["gastos familiares"];
+const GRUPOS_AUTORIZADOS = ["Gastos Familiares"];
 
 if (!GRUPOS_AUTORIZADOS.includes(nombreGrupo.toLowerCase().trim())) return;
 
