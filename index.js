@@ -113,12 +113,14 @@ async function iniciarRaquel() {
     });
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-    const msg = messages[0];
-    if (!msg.message) return;
+        if (type !== 'notify') return;
+        const msg = messages[0];
+        if (!msg.message) return;
 
-    const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-    console.log(`[MENSAJE RECIBIDO]: "${text}" | De: ${msg.key.remoteJid}`);
+        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+        console.log(`[MENSAJE RECIBIDO]: "${text}" | De: ${msg.key.remoteJid}`);
+
+        if (!text) return;
 
         const remoteJid = msg.key.remoteJid;
         if (!remoteJid.endsWith('@g.us')) return;
@@ -136,9 +138,6 @@ async function iniciarRaquel() {
 
         const GRUPOS_AUTORIZADOS = ["gastos familiares"];
         if (!GRUPOS_AUTORIZADOS.includes(nombreGrupo.toLowerCase().trim())) return;
-
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-        if (!text) return;
 
         if (msg.key.fromMe && (text.startsWith("✅") || text.startsWith("🤖") || text.toLowerCase().includes("registrado"))) {
             return;
