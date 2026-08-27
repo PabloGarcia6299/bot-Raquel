@@ -2,9 +2,15 @@
   "name": "bot-raquel-whatsapp",
   "version": "1.0.0",
   "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": "20.x"
+  },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.9",
     "node-fetch": "^2.7.0",
-    "pino": "^9.6.0"
+    "pino": "^9.0.0"
   }
 }
