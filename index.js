@@ -31,7 +31,7 @@ async function iniciarRaquel() {
             if (fs.existsSync(credsFile)) {
                 const credsData = JSON.parse(fs.readFileSync(credsFile, 'utf-8'));
                 if (!credsData.registered) {
-                    console.log('[AUTH] Eliminando sesión no registrada para evitar conflictos...');
+                    console.log('[AUTH] Eliminando sesión no registrada...');
                     fs.rmSync('auth_info_baileys', { recursive: true, force: true });
                 }
             }
@@ -74,7 +74,6 @@ async function iniciarRaquel() {
         if (qr && !sock.authState.creds.registered && !solicitoCodigo) {
             solicitoCodigo = true;
             console.log('[PAIRING] Esperando 5 segundos para estabilizar el socket...');
-            
             await new Promise(r => setTimeout(r, 5000));
             
             try {
@@ -117,47 +116,95 @@ async function iniciarRaquel() {
         const msg = messages[0];
         if (!msg.message) return;
 
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-        console.log(`[MENSAJE RECIBIDO]: "${text}" | De: ${msg.key.remoteJid}`);
-
-        if (!text) return;
+        console.log('\n📩 [PASO 1: EVENTO RECIBIDO] Se detectó actividad en WhatsApp.');
 
         const remoteJid = msg.key.remoteJid;
-        if (!remoteJid.endsWith('@g.us')) return;
+        console.log(`📍 [PASO 2: ORIGEN] JID: ${remoteJid}`);
+
+        if (!remoteJid.endsWith('@g.us')) {
+            console.log('⛔ [DESCARTADO] El mensaje no proviene de un grupo.');
+            return;
+        }
 
         let nombreGrupo = mapaGrupos.get(remoteJid);
         if (!nombreGrupo) {
             try {
+                console.log('🔍 [PASO 3: METADATA] Consultando nombre del grupo a WhatsApp...');
                 const groupMetadata = await sock.groupMetadata(remoteJid);
                 nombreGrupo = groupMetadata.subject;
                 mapaGrupos.set(remoteJid, nombreGrupo);
             } catch (e) {
+                console.error('❌ [ERROR METADATA] Falló obtener nombre de grupo:', e.message);
                 return;
             }
         }
 
+        console.log(`👥 [PASO 3: GRUPO DETECTADO] Nombre: "${nombreGrupo}"`);
+
         const GRUPOS_AUTORIZADOS = ["gastos familiares"];
-        if (!GRUPOS_AUTORIZADOS.includes(nombreGrupo.toLowerCase().trim())) return;
+        const nombreNormalizado = nombreGrupo.toLowerCase().trim();
+        console.log(`🔎 [PASO 4: VALIDACIÓN GRUPO] Nombre procesado: "${nombreNormalizado}" | Permitidos:`, GRUPOS_AUTORIZADOS);
+
+        if (!GRUPOS_AUTORIZADOS.includes(nombreNormalizado)) {
+            console.log(`⛔ [DESCARTADO] El grupo "${nombreGrupo}" NO coincide con la lista de autorizados.`);
+            return;
+        }
+
+        // Extrae texto de mensaje simple, citados o con imagen
+        const text = msg.message.conversation || 
+                     msg.message.extendedTextMessage?.text || 
+                     msg.message.imageMessage?.caption || 
+                     msg.message.videoMessage?.caption;
+
+        console.log(`💬 [PASO 5: CONTENIDO DE MENSAJE] Texto extraído: "${text}"`);
+
+        if (!text) {
+            console.log('⛔ [DESCARTADO] El mensaje no contiene texto procesable.');
+            return;
+        }
 
         if (msg.key.fromMe && (text.startsWith("✅") || text.startsWith("🤖") || text.toLowerCase().includes("registrado"))) {
+            console.log('🤖 [DESCARTADO] Filtro anti-bucle: es una respuesta propia del bot.');
             return;
         }
 
         const rawSender = msg.key.participant || msg.key.remoteJid;
         const sender = rawSender.replace('@s.whatsapp.net', '').replace('@g.us', '').split(':')[0];
+        console.log(`👤 [PASO 6: REMITENTE] Número: ${sender} (fromMe: ${msg.key.fromMe})`);
+
+        console.log('🚀 [PASO 7: ENVIANDO A APPS SCRIPT] Iniciando fetch...');
+        console.log('📦 Payload:', JSON.stringify({ sender, message: text }));
 
         try {
             const response = await fetch(APPS_SCRIPT_URL, {
                 method: 'POST',
                 body: JSON.stringify({ sender, message: text }),
-                headers: { 'Content-Type': 'application/json' }
+                headers: { 'Content-Type': 'application/json' },
+                redirect: 'follow'
             });
-            const resJson = await response.json();
+
+            console.log(`📡 [PASO 8: RESPUESTA HTTP] Status Code: ${response.status} ${response.statusText}`);
+
+            const rawBody = await response.text();
+            console.log(`📄 [PASO 9: CUERPO RECIBIDO] Respuesta de Apps Script:`, rawBody);
+
+            let resJson;
+            try {
+                resJson = JSON.parse(rawBody);
+            } catch (parseError) {
+                console.error('❌ [ERROR PARSE JSON] La respuesta de Google Apps Script no es un JSON válido.');
+                return;
+            }
+
             if (resJson?.text) {
+                console.log(`📤 [PASO 10: ENVIANDO A WHATSAPP] Respondiendo: "${resJson.text}"`);
                 await sock.sendMessage(remoteJid, { text: resJson.text });
+                console.log('✅ [PASO 11: PROCESO COMPLETADO EXITOSAMENTE]');
+            } else {
+                console.log('⚠️ [ADVERTENCIA] Apps Script respondió pero no devolvió el campo "text".');
             }
         } catch (err) {
-            console.error("[APPS SCRIPT ERROR]", err);
+            console.error("❌ [APPS SCRIPT ERROR] Falló la petición fetch:", err);
         }
     });
 }
