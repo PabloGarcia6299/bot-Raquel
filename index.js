@@ -16,7 +16,7 @@ http.createServer((req, res) => res.end('Raquel Bot Activo')).listen(PORT, () =>
 });
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaRMvrEC_NQjxJjwmEgv8rVGymcYSZN2oFzopoG-8E_nKT2QS16FN4tJ2A6tZeCFM5/exec"; 
-const NUMERO_TELEFONO_BOT = "5491167613040";
+const NUMERO_TELEFONO_BOT = "541167613040";
 const MONGODB_URI = process.env.MONGODB_URI;
 
 if (!MONGODB_URI) {
