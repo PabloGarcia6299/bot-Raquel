@@ -108,7 +108,7 @@ async function iniciarRaquel() {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'fatal' }),
-        browser: Browsers.ubuntu('Chrome'),
+        browser: Browsers.macOS('Chrome'),
         markOnlineOnConnect: true,
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 30000
