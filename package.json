@@ -12,6 +12,7 @@
     "@whiskeysockets/baileys": "^6.7.9",
     "mongodb": "^6.9.0",
     "mongo-baileys": "latest",
+    "qrcode": "^1.5.3",
     "node-fetch": "^2.7.0",
     "pino": "^9.0.0"
   }
