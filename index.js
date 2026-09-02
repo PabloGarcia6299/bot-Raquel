@@ -9,9 +9,35 @@ const { MongoClient } = require('mongodb');
 const fetch = require('node-fetch');
 const http = require('http');
 const pino = require('pino');
+const QRCode = require('qrcode');
+
+// --- NUEVO: guardamos el último QR como imagen para poder escanearlo desde el navegador ---
+let currentQrDataUrl = null;
 
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => res.end('Raquel Bot Activo')).listen(PORT, () => {
+http.createServer(async (req, res) => {
+    if (req.url === '/qr') {
+        if (currentQrDataUrl) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(`
+                <html>
+                <head><meta http-equiv="refresh" content="15"></head>
+                <body style="text-align:center;font-family:sans-serif;margin-top:40px;">
+                    <h2>Escaneá este código con WhatsApp</h2>
+                    <p>WhatsApp → Dispositivos vinculados → Vincular un dispositivo</p>
+                    <img src="${currentQrDataUrl}" style="width:280px;height:280px;" />
+                    <p>(la página se actualiza sola cada 15 segundos)</p>
+                </body>
+                </html>
+            `);
+        } else {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end('<html><body style="text-align:center;font-family:sans-serif;margin-top:40px;"><h2>Todavía no hay código QR disponible (o ya está vinculado).</h2></body></html>');
+        }
+    } else {
+        res.end('Raquel Bot Activo');
+    }
+}).listen(PORT, () => {
     console.log(`[HTTP] Servidor escuchando en el puerto ${PORT}`);
 });
 
@@ -125,22 +151,15 @@ async function iniciarRaquel() {
             console.log(`[STATUS] Estado: ${connection}`);
         }
 
-        if (qr && !sock.authState.creds.registered && !solicitoCodigo) {
-            solicitoCodigo = true;
-            console.log('[PAIRING] Esperando 5 segundos para estabilizar el socket...');
-            
-            await new Promise(r => setTimeout(r, 5000));
-            
+        if (qr && !sock.authState.creds.registered) {
             try {
-                const code = await sock.requestPairingCode(NUMERO_TELEFONO_BOT);
-                await saveCreds();
-
+                currentQrDataUrl = await QRCode.toDataURL(qr);
                 console.log('\n====================================');
-                console.log('🔑 CÓDIGO DE VINCULACIÓN DE RAQUEL:', code);
+                console.log('📷 QR LISTO. Abrí esto en cualquier navegador para escanearlo:');
+                console.log('https://bot-raquel.onrender.com/qr');
                 console.log('====================================\n');
             } catch (err) {
-                console.error('[PAIRING ERROR] Error al generar código:', err.message || err);
-                solicitoCodigo = false;
+                console.error('[QR ERROR] No se pudo generar la imagen del QR:', err.message || err);
             }
         }
 
