@@ -2,16 +2,77 @@ const {
     default: makeWASocket, 
     DisconnectReason, 
     fetchLatestBaileysVersion, 
-    Browsers 
+    Browsers,
+    initAuthCreds,
+    BufferJSON,
+    proto
 } = require('@whiskeysockets/baileys');
-const { useMongoDBAuthState } = require('mongo-baileys');
 const { MongoClient } = require('mongodb');
 const fetch = require('node-fetch');
 const http = require('http');
 const pino = require('pino');
 const QRCode = require('qrcode');
 
-// --- NUEVO: guardamos el último QR como imagen para poder escanearlo desde el navegador ---
+// --- NUEVO: implementación propia del auth state sobre MongoDB ---
+// Reemplaza a la librería "mongo-baileys" de la comunidad, que tenía un bug
+// al guardar datos de tipo array (rompía el guardado de claves de sesión
+// silenciosamente, lo cual probablemente causaba fallas al descifrar mensajes).
+async function useMongoDBAuthState(collection) {
+    const writeData = async (id, data) => {
+        const serialized = JSON.parse(JSON.stringify(data, BufferJSON.replacer));
+        // Usamos replaceOne envolviendo el dato en un campo "value": así el
+        // documento que MongoDB actualiza siempre es un objeto, nunca un array
+        // directo, que era la causa exacta del error anterior.
+        await collection.replaceOne({ _id: id }, { _id: id, value: serialized }, { upsert: true });
+    };
+
+    const readData = async (id) => {
+        const doc = await collection.findOne({ _id: id });
+        if (!doc || doc.value === undefined) return null;
+        return JSON.parse(JSON.stringify(doc.value), BufferJSON.reviver);
+    };
+
+    const removeData = async (id) => {
+        await collection.deleteOne({ _id: id });
+    };
+
+    const creds = (await readData('creds')) || initAuthCreds();
+
+    return {
+        state: {
+            creds,
+            keys: {
+                get: async (type, ids) => {
+                    const data = {};
+                    await Promise.all(
+                        ids.map(async (id) => {
+                            let value = await readData(`${type}-${id}`);
+                            if (type === 'app-state-sync-key' && value) {
+                                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                            }
+                            data[id] = value;
+                        })
+                    );
+                    return data;
+                },
+                set: async (data) => {
+                    const tareas = [];
+                    for (const categoria in data) {
+                        for (const id in data[categoria]) {
+                            const value = data[categoria][id];
+                            const key = `${categoria}-${id}`;
+                            tareas.push(value ? writeData(key, value) : removeData(key));
+                        }
+                    }
+                    await Promise.all(tareas);
+                }
+            }
+        },
+        saveCreds: () => writeData('creds', creds)
+    };
+}
+
+// --- Guardamos el último QR como imagen para poder escanearlo desde el navegador ---
 let currentQrDataUrl = null;
 
 const PORT = process.env.PORT || 3000;
@@ -243,7 +304,7 @@ async function iniciarRaquel() {
         }
 
         const rawSender = msg.key.participant || msg.key.remoteJid;
-        const sender = rawSender.replace('@s.whatsapp.net', '').replace('@g.us', '').split(':')[0];
+        const sender = rawSender.replace('@s.whatsapp.net', '').replace('@g.us', '').replace('@lid', '').split(':')[0];
 
         console.log(`[APPS SCRIPT] Enviando a Google Sheets → sender: ${sender}, message: "${text}"`);
 
@@ -255,14 +316,21 @@ async function iniciarRaquel() {
             });
             console.log(`[APPS SCRIPT] Respuesta HTTP recibida. Status: ${response.status}`);
 
-            const resJson = await response.json();
-            console.log('[APPS SCRIPT] Body de respuesta:', JSON.stringify(resJson));
+            const rawBody = await response.text();
+            console.log('[APPS SCRIPT] Body crudo de respuesta:', rawBody);
+
+            let resJson = null;
+            try {
+                resJson = JSON.parse(rawBody);
+            } catch (parseErr) {
+                console.log('[APPS SCRIPT] La respuesta no es JSON válido, se ignora el parseo.');
+            }
 
             if (resJson?.text) {
                 await sock.sendMessage(remoteJid, { text: resJson.text });
                 console.log('[WHATSAPP] Confirmación enviada al grupo.');
             } else {
-                console.log('[APPS SCRIPT] La respuesta no tenía campo "text", no se envió confirmación al grupo.');
+                console.log('[APPS SCRIPT] No hay campo "text" utilizable, no se envió confirmación al grupo.');
             }
         } catch (err) {
             console.error("[APPS SCRIPT ERROR]", err.message || err);
