@@ -77,6 +77,16 @@ let currentQrDataUrl = null;
 
 const PORT = process.env.PORT || 3000;
 http.createServer(async (req, res) => {
+    if (req.url === '/health') {
+        // Endpoint liviano pensado para el cronjob de keep-alive (cron-job.org).
+        // Responde texto plano mínimo, sin HTML, para que nunca dispare el
+        // error "output too large" y para que la respuesta sea lo más rápida
+        // posible (no toca Mongo ni el socket de WhatsApp).
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('OK');
+        return;
+    }
+
     if (req.url === '/qr') {
         if (currentQrDataUrl) {
             res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -153,6 +163,25 @@ async function cerrarSocketAnterior() {
         console.log('[CLEANUP] No se pudo cerrar el socket anterior (no crítico):', e.message);
     }
     sock = null;
+}
+
+// --- NUEVO: envío con reintento para sock.sendMessage ---
+// El error "not-acceptable" (406) suele ser transitorio, típico de una
+// ventana corta de inestabilidad justo después de reconectar (renegociación
+// de sesión). Un par de reintentos con espera cortan la mayoría de los casos.
+async function enviarConReintento(jid, contenido, intentos = 2) {
+    for (let i = 0; i < intentos; i++) {
+        try {
+            await sock.sendMessage(jid, contenido);
+            return true;
+        } catch (err) {
+            console.error(`[WHATSAPP SEND ERROR] intento ${i + 1}/${intentos}:`, err.message || err);
+            if (i < intentos - 1) {
+                await new Promise((r) => setTimeout(r, 3000));
+            }
+        }
+    }
+    return false;
 }
 
 async function iniciarRaquel() {
@@ -308,6 +337,12 @@ async function iniciarRaquel() {
 
         console.log(`[APPS SCRIPT] Enviando a Google Sheets → sender: ${sender}, message: "${text}"`);
 
+        // NUEVO: separamos el llamado a Apps Script del envío por WhatsApp en
+        // dos try/catch independientes. Antes compartían el mismo catch y
+        // cualquier error del sock.sendMessage() se logueaba (mal) como
+        // "[APPS SCRIPT ERROR]", aunque el fetch a Sheets hubiera funcionado
+        // perfecto. Así los logs dicen la verdad sobre dónde falló cada cosa.
+        let resJson = null;
         try {
             const response = await fetch(APPS_SCRIPT_URL, {
                 method: 'POST',
@@ -319,21 +354,24 @@ async function iniciarRaquel() {
             const rawBody = await response.text();
             console.log('[APPS SCRIPT] Body crudo de respuesta:', rawBody);
 
-            let resJson = null;
             try {
                 resJson = JSON.parse(rawBody);
             } catch (parseErr) {
                 console.log('[APPS SCRIPT] La respuesta no es JSON válido, se ignora el parseo.');
             }
+        } catch (err) {
+            console.error("[APPS SCRIPT FETCH ERROR]", err.message || err);
+        }
 
-            if (resJson?.text) {
-                await sock.sendMessage(remoteJid, { text: resJson.text });
+        if (resJson?.text) {
+            const enviado = await enviarConReintento(remoteJid, { text: resJson.text });
+            if (enviado) {
                 console.log('[WHATSAPP] Confirmación enviada al grupo.');
             } else {
-                console.log('[APPS SCRIPT] No hay campo "text" utilizable, no se envió confirmación al grupo.');
+                console.error('[WHATSAPP] No se pudo enviar la confirmación tras los reintentos.');
             }
-        } catch (err) {
-            console.error("[APPS SCRIPT ERROR]", err.message || err);
+        } else {
+            console.log('[APPS SCRIPT] No hay campo "text" utilizable, no se envió confirmación al grupo.');
         }
     });
 }
