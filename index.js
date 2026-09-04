@@ -223,7 +223,7 @@ async function iniciarRaquel() {
         version,
         auth: state,
         printQRInTerminal: false,
-        logger: pino({ level: 'fatal' }),
+        logger: pino({ level: 'trace' }),
         browser: Browsers.macOS('Chrome'),
         markOnlineOnConnect: true,
         connectTimeoutMs: 60000,
