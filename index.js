@@ -12,15 +12,8 @@ import http from 'http';
 import pino from 'pino';
 import QRCode from 'qrcode';
 
-// NUEVO (v7): logger a nivel 'debug' para poder ver el detalle real de lo que
-// pasa con la conexión y el envío de mensajes. Una vez que confirmemos que
-// todo anda bien, lo podés volver a bajar a 'fatal' o 'silent'.
 const logger = pino({ level: 'debug' });
 
-// --- implementación propia del auth state sobre MongoDB ---
-// Reemplaza a la librería "mongo-baileys" de la comunidad, que tenía un bug
-// al guardar datos de tipo array (rompía el guardado de claves de sesión
-// silenciosamente, lo cual probablemente causaba fallas al descifrar mensajes).
 async function useMongoDBAuthState(collection) {
     const writeData = async (id, data) => {
         const serialized = JSON.parse(JSON.stringify(data, BufferJSON.replacer));
@@ -73,7 +66,6 @@ async function useMongoDBAuthState(collection) {
     };
 }
 
-// --- Guardamos el último QR como imagen para poder escanearlo desde el navegador ---
 let currentQrDataUrl = null;
 
 const PORT = process.env.PORT || 3000;
@@ -81,6 +73,9 @@ http.createServer(async (req, res) => {
     if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('OK');
+        // NUEVO: aprovechamos cada ping del cron-job para revisar si hay
+        // mensajes proactivos pendientes. No lo esperamos: no atrasa el health check.
+        revisarYEnviarProactivos();
         return;
     }
 
@@ -110,7 +105,9 @@ http.createServer(async (req, res) => {
 });
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaRMvrEC_NQjxJjwmEgv8rVGymcYSZN2oFzopoG-8E_nKT2QS16FN4tJ2A6tZeCFM5/exec";
-const NUMERO_TELEFONO_BOT = "541167613040";
+// NUEVO: JID fijo del grupo, para poder mandar mensajes proactivos sin
+// depender de que haya llegado un mensaje reciente que lo cachee.
+const GRUPO_GASTOS_JID = "120363428209534703@g.us";
 const MONGODB_URI = process.env.MONGODB_URI;
 
 if (!MONGODB_URI) {
@@ -118,7 +115,6 @@ if (!MONGODB_URI) {
     process.exit(1);
 }
 
-// --- cliente de Mongo, se conecta una sola vez y se reutiliza ---
 const mongoClient = new MongoClient(MONGODB_URI);
 let authCollection = null;
 
@@ -140,10 +136,6 @@ async function limpiarSesionMongo() {
 
 const mapaGrupos = new Map();
 
-// NUEVO (v7): pequeño store en memoria de los mensajes que mandamos, para
-// poder implementar el callback getMessage que Baileys 7 recomienda para
-// reintentos, votos de encuesta y mensajes citados. Se auto-limpia para no
-// acumular memoria indefinidamente.
 const mensajesEnviados = new Map();
 function guardarMensajeEnviado(key, content) {
     mensajesEnviados.set(key.id, content);
@@ -152,7 +144,6 @@ function guardarMensajeEnviado(key, content) {
     }
 }
 
-// --- Control de estado de conexión para evitar sockets duplicados ---
 let sock = null;
 let isConnecting = false;
 let intentoNumero = 0;
@@ -160,20 +151,11 @@ let intentoNumero = 0;
 async function cerrarSocketAnterior() {
     if (!sock) return;
     console.log('[CLEANUP] Cerrando socket anterior antes de reconectar...');
-    try {
-        sock.ev.removeAllListeners();
-    } catch (e) {
-        console.log('[CLEANUP] No se pudieron remover listeners (no crítico):', e.message);
-    }
-    try {
-        sock.end(new Error('Reconexión controlada'));
-    } catch (e) {
-        console.log('[CLEANUP] No se pudo cerrar el socket anterior (no crítico):', e.message);
-    }
+    try { sock.ev.removeAllListeners(); } catch (e) { console.log('[CLEANUP] No se pudieron remover listeners (no crítico):', e.message); }
+    try { sock.end(new Error('Reconexión controlada')); } catch (e) { console.log('[CLEANUP] No se pudo cerrar el socket anterior (no crítico):', e.message); }
     sock = null;
 }
 
-// --- envío con reintento para sock.sendMessage ---
 async function enviarConReintento(jid, contenido, intentos = 2) {
     for (let i = 0; i < intentos; i++) {
         try {
@@ -182,12 +164,41 @@ async function enviarConReintento(jid, contenido, intentos = 2) {
             return true;
         } catch (err) {
             console.error(`[WHATSAPP SEND ERROR] intento ${i + 1}/${intentos}:`, err.message || err);
-            if (i < intentos - 1) {
-                await new Promise((r) => setTimeout(r, 3000));
-            }
+            if (i < intentos - 1) await new Promise((r) => setTimeout(r, 3000));
         }
     }
     return false;
+}
+
+// NUEVO: revisa la hoja "Proactivos" (vía doGet de Apps Script) y manda
+// lo que esté pendiente. Con guard de tiempo para no saturar si el
+// cron-job pega muy seguido.
+let ultimaRevisionProactivos = 0;
+const INTERVALO_REVISION_PROACTIVOS_MS = 5 * 60 * 1000;
+
+async function revisarYEnviarProactivos() {
+    const ahora = Date.now();
+    if (ahora - ultimaRevisionProactivos < INTERVALO_REVISION_PROACTIVOS_MS) return;
+    if (!sock || !sock.user) return;
+    ultimaRevisionProactivos = ahora;
+
+    try {
+        const response = await fetch(`${APPS_SCRIPT_URL}?accion=proactivos_pendientes`);
+        const data = await response.json();
+        const pendientes = data.pendientes || [];
+
+        for (const item of pendientes) {
+            const enviado = await enviarConReintento(GRUPO_GASTOS_JID, { text: item.mensaje });
+            if (enviado) {
+                await fetch(`${APPS_SCRIPT_URL}?accion=marcar_enviado&id=${encodeURIComponent(item.id)}`);
+                console.log(`[PROACTIVO] Enviado y marcado: ${item.tipo} (${item.persona || 'grupo'})`);
+            } else {
+                console.error(`[PROACTIVO] No se pudo enviar: ${item.tipo}`);
+            }
+        }
+    } catch (err) {
+        console.error('[PROACTIVO ERROR]', err.message || err);
+    }
 }
 
 async function iniciarRaquel() {
@@ -229,10 +240,6 @@ async function iniciarRaquel() {
         version,
         auth: {
             creds: state.creds,
-            // NUEVO (v7): cachea las claves de sesión Signal en memoria para no
-            // tener que reconstruir la sesión con cada dispositivo en cada
-            // mensaje. Recomendado por Baileys 7 para mejorar el envío/recepción,
-            // justo lo que nos venía fallando con los dispositivos @lid.
             keys: makeCacheableSignalKeyStore(state.keys, logger)
         },
         printQRInTerminal: false,
@@ -241,11 +248,7 @@ async function iniciarRaquel() {
         markOnlineOnConnect: true,
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
-        // NUEVO (v7): recomendado por Baileys para que los reintentos de envío,
-        // los votos de encuesta y las citas de mensajes funcionen bien.
-        getMessage: async (key) => {
-            return mensajesEnviados.get(key.id);
-        }
+        getMessage: async (key) => mensajesEnviados.get(key.id)
     });
 
     console.log('[SOCKET] Socket creado, esperando eventos de conexión...');
@@ -255,9 +258,7 @@ async function iniciarRaquel() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        if (connection) {
-            console.log(`[STATUS] Estado: ${connection}`);
-        }
+        if (connection) console.log(`[STATUS] Estado: ${connection}`);
 
         if (qr && !sock.authState.creds.registered) {
             try {
@@ -282,7 +283,7 @@ async function iniciarRaquel() {
                 await limpiarSesionMongo();
                 setTimeout(iniciarRaquel, 5000);
             } else if (statusCode === DisconnectReason.connectionReplaced) {
-                console.log('[DISCONNECT] Error 440 (connectionReplaced): esperando 30s antes de reintentar para evitar otra colisión...');
+                console.log('[DISCONNECT] Error 440 (connectionReplaced): esperando 30s antes de reintentar...');
                 setTimeout(iniciarRaquel, 30000);
             } else {
                 setTimeout(iniciarRaquel, 10000);
@@ -301,10 +302,6 @@ async function iniciarRaquel() {
             console.log(`[FILTRO] Evento ignorado: tipo "${type}" no es "notify".`);
             return;
         }
-
-        // NUEVO (v7): Baileys aclara que 'messages' puede traer más de un
-        // mensaje por evento, así que ahora los recorremos a todos (antes solo
-        // se miraba messages[0], lo que podía hacer perder mensajes).
         for (const msg of messages) {
             await procesarMensaje(msg);
         }
@@ -355,20 +352,18 @@ async function procesarMensaje(msg) {
         return;
     }
 
-    // El identificador del remitente puede venir como número real
-    // (...@s.whatsapp.net), como LID (...@lid, el ID anónimo que WhatsApp usa
-    // ahora para algunos participantes de grupo) o, si vos mismo mandás desde
-    // tu propio número, directamente en remoteJid.
-    const rawSender = msg.key.participant || msg.key.remoteJid;
-    const sender = rawSender.replace('@s.whatsapp.net', '').replace('@g.us', '').replace('@lid', '').split(':')[0];
+    // NUEVO: solo ustedes dos están en el grupo y el bot corre con tu número
+    // → fromMe=true sos vos, fromMe=false es Chechilia. Reemplaza por completo
+    // el intento anterior de identificar por teléfono/LID (no funcionaba).
+    const quienEscribe = msg.key.fromMe ? "Pablo" : "Chechilia";
 
-    console.log(`[APPS SCRIPT] Enviando a Google Sheets → sender: ${sender}, message: "${text}"`);
+    console.log(`[APPS SCRIPT] Enviando a Google Sheets → quienEscribe: ${quienEscribe}, message: "${text}"`);
 
     let resJson = null;
     try {
         const response = await fetch(APPS_SCRIPT_URL, {
             method: 'POST',
-            body: JSON.stringify({ sender, message: text }),
+            body: JSON.stringify({ quienEscribe, message: text }),
             headers: { 'Content-Type': 'application/json' }
         });
         console.log(`[APPS SCRIPT] Respuesta HTTP recibida. Status: ${response.status}`);
@@ -397,11 +392,7 @@ async function procesarMensaje(msg) {
     }
 }
 
-process.on('unhandledRejection', (reason) => {
-    console.error('[UNHANDLED REJECTION]', reason);
-});
-process.on('uncaughtException', (err) => {
-    console.error('[UNCAUGHT EXCEPTION]', err);
-});
+process.on('unhandledRejection', (reason) => console.error('[UNHANDLED REJECTION]', reason));
+process.on('uncaughtException', (err) => console.error('[UNCAUGHT EXCEPTION]', err));
 
 iniciarRaquel();
