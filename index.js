@@ -104,7 +104,7 @@ http.createServer(async (req, res) => {
     console.log(`[HTTP] Servidor escuchando en el puerto ${PORT}`);
 });
 
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxaRMvrEC_NQjxJjwmEgv8rVGymcYSZN2oFzopoG-8E_nKT2QS16FN4tJ2A6tZeCFM5/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyOULl_UFiQ8D8Mwqw-yRNMjtrFJu5OcrO_Un-dTEMYTu7DFVs-7cEbVarSHFSpTKFI/exec";
 // NUEVO: JID fijo del grupo, para poder mandar mensajes proactivos sin
 // depender de que haya llegado un mensaje reciente que lo cachee.
 const GRUPO_GASTOS_JID = "120363428209534703@g.us";
